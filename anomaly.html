@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>서버이전 특이사항 집중분석</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@500;600;700&family=Noto+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: single report column (max 920px), summary first, then two server case files, then implications */
+:root{
+  --bg:#f6f7f9; --paper:#ffffff; --ink:#18202b; --muted:#5b6574; --line:#dde1e7; --soft:#eef1f5;
+  --dep:#2450c7; --dep-soft:#e6ecfb; --ant:#c77a12; --ant-soft:#fbf0df; --other:#a3abb7; --down:#c2410c;
+  --f-head:"IBM Plex Sans KR","Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  --f-body:"Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  --f-num:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11151b; --paper:#181d25; --ink:#e7ebf1; --muted:#9aa4b2; --line:#2a313c; --soft:#1f252e;
+  --dep:#7c9cff; --dep-soft:#1e2945; --ant:#f0a640; --ant-soft:#352816; --other:#5d6675; --down:#fb8a5a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11151b; --paper:#181d25; --ink:#e7ebf1; --muted:#9aa4b2; --line:#2a313c; --soft:#1f252e;
+  --dep:#7c9cff; --dep-soft:#1e2945; --ant:#f0a640; --ant-soft:#352816; --other:#5d6675; --down:#fb8a5a; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.7;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:32px 56px}
+.wrap{max-width:920px;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+h1,h2,h3{font-family:var(--f-head);text-wrap:balance;margin:0;line-height:1.35}
+h1{font-size:clamp(24px,4vw,32px);font-weight:700}
+h2{font-size:20px;font-weight:700;display:flex;gap:10px;align-items:baseline}
+h2 .no{font-family:var(--f-num);font-size:14px;color:var(--muted)}
+h3{font-size:16px;font-weight:600}
+p{margin:0}
+.num{font-family:var(--f-num);font-variant-numeric:tabular-nums}
+.eyebrow{font-size:12px;letter-spacing:.08em;color:var(--muted);font-weight:500}
+header{display:flex;flex-direction:column;gap:10px;padding-bottom:20px;border-bottom:2px solid var(--ink)}
+.meta{display:flex;flex-wrap:wrap;gap:6px 22px;font-size:13px;color:var(--muted)}
+.meta b{color:var(--ink);font-weight:500;margin-left:6px}
+section{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:24px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.lead{font-size:16px}
+.summary{display:flex;flex-direction:column;gap:12px;margin:0;padding:0;list-style:none}
+.summary li{display:grid;grid-template-columns:88px 1fr;gap:12px;align-items:start}
+.tag{font-size:12px;font-weight:700;padding:3px 8px;border-radius:4px;text-align:center;white-space:nowrap}
+.tag.dep{background:var(--dep-soft);color:var(--dep)} .tag.ant{background:var(--ant-soft);color:var(--ant)} .tag.mn{background:var(--soft);color:var(--down)}
+.quote{background:var(--soft);border-radius:8px;padding:14px 16px;font-weight:500}
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.kpi{border:1px solid var(--line);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.kpi .l{font-size:12px;color:var(--muted)}
+.kpi .v{font-family:var(--f-num);font-size:20px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.kpi .s{font-size:12px;color:var(--muted)}
+.dep-c{color:var(--dep)} .ant-c{color:var(--ant)} .down-c{color:var(--down)}
+.chart{overflow-x:auto} .chart svg{display:block;width:100%;height:auto;min-width:560px}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--muted)}
+.legend i{display:inline-block;width:12px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:540px}
+th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th{font-size:12px;color:var(--muted);font-weight:500;background:var(--soft)}
+th:first-child,td:first-child{text-align:left}
+td.num{font-family:var(--f-num)}
+.causes{display:flex;flex-direction:column;gap:12px;margin:0;padding:0;list-style:none;counter-reset:c}
+.causes li{display:grid;grid-template-columns:28px 1fr;gap:10px}
+.causes li::before{counter-increment:c;content:counter(c);font-family:var(--f-num);font-size:13px;width:24px;height:24px;border-radius:50%;
+  background:var(--ink);color:var(--paper);display:flex;align-items:center;justify-content:center;margin-top:2px}
+.causes .ev{font-size:12px;color:var(--muted);display:block;margin-top:2px}
+.note{font-size:13px;color:var(--muted)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.box{border:1px solid var(--line);border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:6px;min-width:0}
+ul.plain{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.src a{color:var(--dep);word-break:break-all}
+@media (max-width:720px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.two{grid-template-columns:1fr}.summary li{grid-template-columns:1fr;gap:4px}.summary .tag{justify-self:start}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<header>
+  <span class="eyebrow">마케팅팀 내부 분석 보고 · 보고일자 2026.11.10</span>
+  <h1>리니지클래식 서버이전 특이사항 집중분석</h1>
+  <div class="meta">
+    <span>작성자<b>강은혜 매니저</b></span>
+    <span>비교 기준<b>이전 전 30일(10/04~11/03) vs 이전 후 4일(11/04~11/07) 일평균</b></span>
+    <span>대상<b>바로템 순수 [아이템] 서버별 거래</b></span>
+  </div>
+</header>
+
+<section>
+  <h2>핵심 요약</h2>
+  <p class="lead">서버이전 후 거래량이 늘어난 것은 전 서버 공통 현상입니다(대부분 2배 안팎). 이 보고서는 그 평균에서 크게 벗어난 서버만 골라 원인을 분석했습니다.</p>
+  <ul class="summary">
+    <li><span class="tag dep">데포로쥬</span><span><b>일회성 초고가 쏠림.</b> 아이템 거래액이 하루 0.36억에서 3.24억으로 9배 늘었습니다. 건수는 2배에 그쳤고 건당 단가가 160만 원에서 707만 원으로 뛰었습니다. 11/4 마갑주 업데이트와 전투명가 복귀가 겹친 11/4~11/6 사흘에 집중됐고, 11/7에는 평소 수준으로 돌아왔습니다.</span></li>
+    <li><span class="tag ant">안타라스</span><span><b>지속형 정착 수요.</b> 아이템 거래액이 5.2배, 계정 거래액이 11.5배 늘었고 11/7까지 높은 수준이 유지되고 있습니다. 이번 3차 이전부터 처음으로 이전해 들어갈 수 있는 서버로 열린 영향으로 보입니다.</span></li>
+    <li><span class="tag mn">매니아</span><span><b>특이 수요가 생긴 두 서버에서 매니아 아이템 거래액은 오히려 줄었습니다.</b> 데포로쥬는 하루 676만 원에서 165만 원, 안타라스는 320만 원에서 144만 원입니다.</span></li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="no">01</span>특이 서버 선별: 서버별 증가 배율</h2>
+  <p>이전 전 30일 일평균 대비 이전 후 4일 일평균 아이템 거래액 배율입니다. 이전 후 하루 2천만 원 이상 거래된 26개 서버만 비교했습니다. 서버 대부분이 1.3~3배 구간에 모여 있고(중앙값 2.1배), 데포로쥬와 안타라스 두 곳만 이 구간을 크게 벗어납니다.</p>
+  <div class="chart" id="multChart" role="img" aria-label="서버별 아이템 거래액 증가 배율 막대 차트"></div>
+  <p class="note">데포로쥬와 안타라스를 뺀 24개 서버의 합산 배율은 2.0배입니다. 이전 후 전체 증가분(30일 평균 대비 약 31.9억) 중 36%를 데포로쥬 한 곳이 차지했습니다.</p>
+</section>
+
+<section>
+  <h2><span class="no">02</span>데포로쥬: 사흘간 몰린 초고가 장비 거래</h2>
+  <div class="kpis">
+    <div class="kpi"><span class="l">일평균 거래액</span><span class="v dep-c">3.24억</span><span class="s">이전 전 0.36억 · 9.0배</span></div>
+    <div class="kpi"><span class="l">건당 평균 단가</span><span class="v dep-c">707만</span><span class="s">이전 전 160만 · 4.4배</span></div>
+    <div class="kpi"><span class="l">일평균 건수</span><span class="v">45.8건</span><span class="s">이전 전 22.3건 · 2.1배</span></div>
+    <div class="kpi"><span class="l">바로템 아이템 중 비중</span><span class="v dep-c">23.3%</span><span class="s">이전 전 6.2%</span></div>
+  </div>
+
+  <h3>일별 아이템 거래액 추이 (바로템, 백만 원)</h3>
+  <div class="legend"><span><i style="background:var(--dep)"></i>데포로쥬</span><span><i style="background:var(--ant)"></i>안타라스</span></div>
+  <div class="chart" id="dailyChart" role="img" aria-label="10월 21일부터 11월 7일까지 데포로쥬와 안타라스 일별 아이템 거래액 선 차트"></div>
+
+  <h3>무엇이 특이한가</h3>
+  <ul class="plain">
+    <li><b>많이 팔린 것이 아니라 비싼 것이 팔렸습니다.</b> 건수는 안타라스(하루 52.8건)보다 적은데 거래액은 4배가 넘습니다. 기존 보고서의 바로템 최고가 거래 TOP 10이 모두 데포로쥬였고, 10천지, 10화활, 10뇌신 같은 초고강화 무기와 용비늘 갑옷 계열 통장비가 5천만~8천만 원에 거래됐습니다.</li>
+    <li><b>기간이 사흘에 집중됐습니다.</b> 11/4~11/6은 하루 4억 안팎이었고, 11/7은 0.36억으로 이전 전 평균 수준으로 돌아왔습니다.</li>
+    <li><b>상승은 이전 전부터 시작됐습니다.</b> 10/29(0.71억)부터 오르기 시작했고 11/2~11/3에 이미 하루 1.6~1.8억이었습니다.</li>
+    <li><b>아데나 거래는 오히려 줄었습니다.</b> 바로템 데포로쥬 게임머니 거래액은 하루 1,280만 원에서 900만 원(0.7배)으로 줄었습니다. 반면 계정 거래액은 530만 원에서 2,090만 원으로 4배 늘었습니다. 아데나로 장비를 맞추는 흐름이 아니라, 현금으로 완제품 장비나 계정을 바로 사고판 흐름입니다.</li>
+  </ul>
+
+  <h3>왜 데포로쥬였나</h3>
+  <ol class="causes">
+    <li><span><b>11/4 업데이트로 최상위 방어구 '마갑주'가 추가됐습니다.</b> 마갑주는 용비늘 갑옷을 강화해 만드는 장비로, 제작 재료에 같은 속성의 <b>+7 용비늘 갑옷</b>이 들어갑니다. 고가 거래 품목의 다수인 호갑, 풍갑, 수갑, 화갑 같은 용비늘 갑옷 계열과 그대로 겹칩니다.<span class="ev">근거: 인벤 11/4 업데이트 공지, 마갑주 제작 총정리 기사</span></span></li>
+    <li><span><b>같은 날 3차 서버이전이 시작되면서 전투명가가 데포로쥬로 돌아왔습니다.</b> 인벤 세력 현황에 따르면 마프르로 갔던 전투명가가 데포로쥬로 복귀해 똘끼와 함께 노통수연합 라인을 다시 꾸렸습니다. 대형 혈맹이 재결집하면서 쟁에 쓸 엔드 장비 수요가 한꺼번에 생긴 것으로 보입니다.<span class="ev">근거: 인벤 '3차 이전 세력 현황' 11/9 갱신 (유저 정리글, 공식 확인 아님)</span></span></li>
+    <li><span><b>이전 전 상승은 업데이트와 이전 일정을 앞둔 선매수로 추정됩니다.</b> 마갑주 정리 기사는 11/3에 나왔고, 데포로쥬 거래액은 10/29부터 오르기 시작했습니다. 다만 10/29~11/3 상승의 직접 원인은 이번 자료로 확인되지 않습니다.</span></li>
+  </ol>
+  <p class="quote">정리하면 데포로쥬는 서버이전 자체보다 <b>마갑주 업데이트와 대형 혈맹 복귀가 같은 날 겹친 결과</b>입니다. 큰손들이 장비를 한꺼번에 맞춘 사흘짜리 이벤트에 가깝습니다.</p>
+</section>
+
+<section>
+  <h2><span class="no">03</span>안타라스: 새로 열린 이전 서버의 정착 수요</h2>
+  <div class="kpis">
+    <div class="kpi"><span class="l">일평균 아이템 거래액</span><span class="v ant-c">0.77억</span><span class="s">이전 전 0.15억 · 5.2배</span></div>
+    <div class="kpi"><span class="l">일평균 아이템 건수</span><span class="v ant-c">52.8건</span><span class="s">이전 전 16.5건 · 3.2배</span></div>
+    <div class="kpi"><span class="l">건당 평균 단가</span><span class="v">145만</span><span class="s">이전 전 89만 · 1.6배</span></div>
+    <div class="kpi"><span class="l">일평균 계정 거래액</span><span class="v ant-c">1,379만</span><span class="s">이전 전 120만 · 11.5배</span></div>
+  </div>
+  <ul class="plain">
+    <li><b>데포로쥬와 성격이 다릅니다.</b> 단가보다 건수가 크게 늘었고, 11/4 1.07억 이후에도 하루 0.6~0.7억이 11/7까지 이어지고 있습니다.</li>
+    <li><b>계정 거래가 26개 서버 중 가장 크게(11.5배) 늘었습니다.</b> 서버 진입을 위해 장비뿐 아니라 계정째 사는 수요가 생긴 것으로 보입니다.</li>
+    <li><b>원인: 이번에 처음 이전해 들어갈 수 있는 서버로 열렸습니다.</b> 9월 2차 이전 때는 안타라스가 이전 대상에서 제외됐고, 11/4 3차 이전 안내에서 이전 가능 서버로 새로 추가됐습니다. 새로 들어온 유저들이 정착하려고 기본 세팅을 갖추는 수요로 보입니다.<span class="note"> (근거: 인벤 9/16 서버이전 변경 기사, 11/4 서버 이전 세부 안내)</span></li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="no">04</span>매니아 관점: 특이 수요가 생긴 서버에서 오히려 줄었습니다</h2>
+  <div class="tbl">
+  <table>
+    <thead><tr><th>서버 · 구분 (일평균)</th><th>바로템 이전 전</th><th>바로템 이전 후</th><th>매니아 이전 전</th><th>매니아 이전 후</th></tr></thead>
+    <tbody>
+      <tr><td>데포로쥬 · 아이템</td><td class="num">3,576만</td><td class="num">3억 2,361만</td><td class="num">676만</td><td class="num down-c">165만</td></tr>
+      <tr><td>데포로쥬 · 계정</td><td class="num">530만</td><td class="num">2,093만</td><td class="num">100만</td><td class="num down-c">5만</td></tr>
+      <tr><td>안타라스 · 아이템</td><td class="num">1,473만</td><td class="num">7,667만</td><td class="num">320만</td><td class="num down-c">144만</td></tr>
+      <tr><td>안타라스 · 계정</td><td class="num">120만</td><td class="num">1,379만</td><td class="num">25만</td><td class="num down-c">0</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>두 서버 모두 수요가 폭증한 구간에서 매니아는 아이템과 계정 거래액이 줄었습니다. 데포로쥬처럼 수천만 원대 장비가 현금으로 오가는 거래와, 안타라스처럼 계정째 사는 정착 수요 모두 매니아로 들어오지 않았습니다.</p>
+</section>
+
+<section>
+  <h2><span class="no">05</span>시사점: 다음 서버이전 때 볼 것</h2>
+  <div class="two">
+    <div class="box"><h3>이벤트형 (데포로쥬 유형)</h3><p>업데이트로 신규 최상위 장비가 나오고, 대형 혈맹 이동이 같은 날 겹치면 특정 서버에 초고가 거래가 며칠간 집중됩니다. 업데이트 공지와 혈맹 이동 소식을 이전 시작 전에 확인해야 대응할 수 있습니다.</p></div>
+    <div class="box"><h3>정착형 (안타라스 유형)</h3><p>이전 인입이 처음 열리는 서버는 장비와 계정 수요가 며칠 이상 이어집니다. 이전 공지에서 새로 열린 서버를 먼저 확인하면 수요가 생길 서버를 미리 짚을 수 있습니다.</p></div>
+  </div>
+  <ul class="plain">
+    <li>3차 이전은 11/17까지 이어집니다. 마감까지 데이터를 다시 보면 데포로쥬가 다시 튀는지, 안타라스 수요가 유지되는지 확인할 수 있습니다.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>데이터 기준과 출처</h2>
+  <ul class="plain note">
+    <li>바로템 수치는 서버별 거래현황 표 기준이며 날짜는 체결일이 아닌 <b>물품 등록일</b>입니다. 매니아 수치는 거래완료 기준(취소 제외)입니다.</li>
+    <li>바로템 서버별 자료가 없는 10/20과 11/8은 평균에서 뺐습니다. 그래서 이전 후 기간은 4일이며, 기존 보고서의 5일 합계 수치와 다릅니다.</li>
+    <li>혈맹 이동 내용은 인벤 유저 정리글 기준으로, 공식 확인된 정보가 아닙니다.</li>
+  </ul>
+  <ul class="plain note src">
+    <li><a href="https://www.inven.co.kr/board/lineageclassic/6482/18308" target="_blank" rel="noopener">인벤 · 리니지 클래식 서버 이전 세부 안내 (11/4)</a></li>
+    <li><a href="https://www.inven.co.kr/board/lineageclassic/6482/18309" target="_blank" rel="noopener">인벤 · 11/4 업데이트 (오만의 탑 증축, 마갑주 추가 등)</a></li>
+    <li><a href="https://www.invenglobal.com/articles/28134/immense-crafting-difficulty-a-complete-guide-to-magapju-the-ultimate-armor-for-top-players" target="_blank" rel="noopener">Inven Global · 마갑주 제작 총정리</a></li>
+    <li><a href="https://www.inven.co.kr/board/lineageclassic/6482/18347" target="_blank" rel="noopener">인벤 · 3차 이전 세력 현황 (11/9 갱신)</a></li>
+    <li><a href="https://www.inven.co.kr/webzine/news/?news=321008" target="_blank" rel="noopener">인벤 · 서버이전 변경 포인트 (9/16, 안타라스 제외)</a></li>
+    <li><a href="https://www.inven.co.kr/webzine/news/?news=323130" target="_blank" rel="noopener">인벤 · 21차 공성전 주요 이슈 (11/8)</a></li>
+  </ul>
+</section>
+</div>
+
+<script>
+(function(){
+  var NS="http://www.w3.org/2000/svg";
+  function el(t,a,txt){var e=document.createElementNS(NS,t);for(var k in a)e.setAttribute(k,a[k]);if(txt!=null)e.textContent=txt;return e;}
+  var css=getComputedStyle(document.documentElement);
+  function c(n){return css.getPropertyValue(n).trim();}
+
+  // 01 multipliers
+  var mult=[["데포로쥬",9.05],["안타라스",5.2],["케레니스",4.38],["하딘",3.56],["듀크데필",2.99],["켄라우헬",2.88],["하이네",2.88],["로엔그린",2.71],["어레인",2.42],["아인하사드",2.35],["질리언",2.25],["사이하",2.24],["조우",2.15],["오렌",2.13],["캐스톨",2.07],["크리스터",2.05],["오웬",1.88],["마프르",1.72],["린델",1.67],["발라카스",1.59],["에바",1.41],["글루디오",1.4],["아스테어",1.39],["데컨",1.32],["파아그리오",1.32],["가드리아",0.99]];
+  function drawMult(){
+    var box=document.getElementById("multChart");box.innerHTML="";
+    var W=860,rowH=22,top=24,left=92,right=56,H=top+mult.length*rowH+8,max=10;
+    var s=el("svg",{viewBox:"0 0 "+W+" "+H});
+    var x=function(v){return left+(W-left-right)*v/max;};
+    [0,2,4,6,8,10].forEach(function(t){
+      s.appendChild(el("line",{x1:x(t),x2:x(t),y1:top-6,y2:H-8,stroke:c("--line"),"stroke-width":1}));
+      s.appendChild(el("text",{x:x(t),y:14,"text-anchor":"middle","font-size":11,fill:c("--muted"),"font-family":"IBM Plex Mono, monospace"},t+"배"));
+    });
+    mult.forEach(function(d,i){
+      var y=top+i*rowH, col=d[0]==="데포로쥬"?c("--dep"):d[0]==="안타라스"?c("--ant"):c("--other");
+      var strong=i<2;
+      s.appendChild(el("text",{x:left-8,y:y+14,"text-anchor":"end","font-size":12,fill:strong?c("--ink"):c("--muted"),"font-weight":strong?700:400},d[0]));
+      s.appendChild(el("rect",{x:left,y:y+4,width:Math.max(1,x(d[1])-left),height:rowH-8,rx:2,fill:col}));
+      s.appendChild(el("text",{x:x(d[1])+6,y:y+14,"font-size":11,fill:strong?c("--ink"):c("--muted"),"font-family":"IBM Plex Mono, monospace"},d[1].toFixed(1)+"배"));
+    });
+    var med=2.14;
+    s.appendChild(el("line",{x1:x(med),x2:x(med),y1:top-6,y2:H-8,stroke:c("--ink"),"stroke-width":1,"stroke-dasharray":"3 3"}));
+    s.appendChild(el("text",{x:x(med)+6,y:H-12,"font-size":11,fill:c("--ink")},"중앙값 2.1배"));
+    box.appendChild(s);
+  }
+
+  // 02 daily
+  var days=["10/21","10/22","10/23","10/24","10/25","10/26","10/27","10/28","10/29","10/30","10/31","11/01","11/02","11/03","11/04","11/05","11/06","11/07"];
+  var dep=[8.8,12.5,20.0,18.9,14.3,17.2,15.3,17.6,70.5,89.3,41.4,32.9,157.2,179.5,395.4,438.3,424.7,36.1];
+  var ant=[13.5,7.8,10.8,7.3,16.5,10.9,19.7,21.9,14.1,18.6,26.6,9.3,15.3,20.5,106.7,69.1,62.2,68.7];
+  function drawDaily(){
+    var box=document.getElementById("dailyChart");box.innerHTML="";
+    var W=860,H=300,l=52,r=20,t=28,b=34,max=500;
+    var s=el("svg",{viewBox:"0 0 "+W+" "+H});
+    var x=function(i){return l+(W-l-r)*i/(days.length-1);}, y=function(v){return t+(H-t-b)*(1-v/max);};
+    // event band 11/04~11/06
+    s.appendChild(el("rect",{x:x(14)-8,y:t,width:x(16)-x(14)+16,height:H-t-b,fill:c("--dep-soft")}));
+    s.appendChild(el("line",{x1:x(14),x2:x(14),y1:t,y2:H-b,stroke:c("--ink"),"stroke-width":1,"stroke-dasharray":"3 3"}));
+    s.appendChild(el("text",{x:x(14)-12,y:t+12,"text-anchor":"end","font-size":11,fill:c("--ink")},"11/4 마갑주 업데이트 · 3차 이전 시작"));
+    [0,100,200,300,400,500].forEach(function(v){
+      s.appendChild(el("line",{x1:l,x2:W-r,y1:y(v),y2:y(v),stroke:c("--line"),"stroke-width":1}));
+      s.appendChild(el("text",{x:l-8,y:y(v)+4,"text-anchor":"end","font-size":11,fill:c("--muted"),"font-family":"IBM Plex Mono, monospace"},v));
+    });
+    days.forEach(function(d,i){ if(i%2===0||i===days.length-1) s.appendChild(el("text",{x:x(i),y:H-12,"text-anchor":"middle","font-size":11,fill:c("--muted"),"font-family":"IBM Plex Mono, monospace"},d)); });
+    function line(arr,col){
+      var p=arr.map(function(v,i){return (i?"L":"M")+x(i).toFixed(1)+" "+y(v).toFixed(1);}).join(" ");
+      s.appendChild(el("path",{d:p,fill:"none",stroke:col,"stroke-width":2.5,"stroke-linejoin":"round"}));
+      arr.forEach(function(v,i){ if(i>=14) s.appendChild(el("circle",{cx:x(i),cy:y(v),r:3.5,fill:col})); });
+    }
+    line(ant,c("--ant")); line(dep,c("--dep"));
+    s.appendChild(el("text",{x:x(15),y:y(438.3)-10,"text-anchor":"middle","font-size":11,fill:c("--dep"),"font-family":"IBM Plex Mono, monospace"},"438"));
+    s.appendChild(el("text",{x:x(17)-4,y:y(36.1)+18,"text-anchor":"end","font-size":11,fill:c("--dep"),"font-family":"IBM Plex Mono, monospace"},"11/7 36"));
+    s.appendChild(el("text",{x:x(17),y:y(68.7)-10,"text-anchor":"end","font-size":11,fill:c("--ant"),"font-family":"IBM Plex Mono, monospace"},"69"));
+    box.appendChild(s);
+  }
+  function draw(){css=getComputedStyle(document.documentElement);drawMult();drawDaily();}
+  draw();
+  try{window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",draw);}catch(e){}
+  try{new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});}catch(e){}
+})();
+</script>
+</body>
+</html>
